@@ -1,0 +1,218 @@
+=============================================================================================
+param ($server = $(throw "Usage: .\test-RemoteServerConfig.ps1 remoteservername"))
+# To Do:
+# 2. verify crashhandler installed (registry)
+# 3. check PowerShell execution policy (???)
+# 6. warn if IIS is enabled
+$pass = 0
+$fail = 0
+$warn = 0
+$failList = ""
+$warnList = ""
+write-host "$(get-date) Testing $server..."
+#
+# Some of the test require registry info
+#
+$reg = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $server)
+# -----------------------
+# Check Required Services
+# -----------------------
+# Load the DLL containing the required assemblies, if it isn't already loaded
+if (-not ([appdomain]::CurrentDomain.getassemblies() |? {$_.ManifestModule -like "system.serviceprocess"})) {[void][System.Reflection.Assembly]::LoadWithPartialName('system.serviceprocess')}
+$dgagentInstalled = $false
+$iisInstalled = $false
+$pmsInstalled = $false
+$service = "W3SVC"
+$remoteService = Get-WmiObject -ComputerName $Server win32_service -filter "name='$service'"
+if ($remoteService)
+   {
+   write-host -foregroundcolor green "PASS: $service is installed"
+#  but is it enabled?
+   $pass += 1
+   }
+else
+   {
+   write-host -foregroundcolor red "FAIL: $service is NOT installed"
+   $fail += 1
+   $failList += "IIS "
+   }
+$service = "PMS"
+$remoteService = Get-WmiObject -ComputerName $Server win32_service -filter "name='$service'"
+if ($remoteService)
+   {
+   write-host -foregroundcolor green "PASS: $service is installed"
+#  but is it enabled?
+   $pass += 1
+   }
+else
+   {
+   write-host -foregroundcolor red "FAIL: $service is NOT installed"
+   $fail += 1
+   $failList += "PMS "
+   }
+$service = "dgagent-standard"
+$remoteService = Get-WmiObject -ComputerName $Server win32_service -filter "name='$service'"
+if ($remoteService)
+   {
+   write-host -foregroundcolor green "PASS: $service is installed"
+#  but is it enabled?
+   $pass += 1
+   }
+else
+   {
+   write-host -foregroundcolor red "FAIL: $service is NOT installed"
+   $fail += 1
+   $failList += "dgagent "
+}
+  
+# ---------------------
+# Check ExecutionPolicy
+# ---------------------
+# if ($(get-executionpolicy) -eq "RemoteSigned")
+#    {
+#    write-host -foregroundcolor green "PASS: ExecutionPolicy is RemoteSigned"
+#    $pass += 1
+#    }
+# else
+#    {
+#    write-host -foregroundcolor red   "FAIL: ExecutionPolicy is NOT RemoteSigned"
+#    $fail += 1
+#    }
+ 
+# ---------
+# Check UAC
+# ---------
+$regKey = $reg.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\policies\\system" )
+$UACenableLUA = $regkey.GetValue('EnableLUA')
+if ($UACEnableLUA -eq 0)
+   {
+   write-host -foregroundcolor green "PASS: UAC is disabled"
+   $pass += 1
+   }
+else
+   {
+   write-host -foregroundcolor red   "FAIL: UAC is NOT disabled"
+   $fail += 1
+   $failList += "UACdisabled "
+   }
+ 
+# ----------------------
+# Check Windows Firewall
+# ----------------------
+$disabledFirewalls = 0
+$enabledFirewalls = 0
+foreach ($rawline in (invoke-expression "netsh -r $Server advfirewall show allprofiles state"))
+   {
+   if ($rawline -match "(.*)State(.*)OFF(.*)")
+      {
+      $disabledFirewalls += 1
+      }
+   elseif ($rawline -match "(.*)State(.*)ON(.*)")
+      {
+      $enabledFirewalls += 1
+      }
+   }
+if ($enabledFirewalls -eq 0)
+   {
+   write-host -foregroundcolor green "PASS: all Windows firewalls are disabled"
+   $pass += 1
+   }
+else
+   {
+   write-host -foregroundcolor red   "FAIL: $enabledFirewalls Windows firewalls are NOT disabled"
+   $fail += 1
+   $failList += "firewallsDisabled "
+   }
+  
+# -----------------
+# Check .NET 3.5sp1
+# -----------------
+$regKey = $reg.OpenSubKey("SOFTWARE\\Microsoft\\Net Framework Setup\\NDP\\v3.5" )
+if ($regKey -ne $null)
+   {
+   $dotNet3p5version = $regkey.GetValue('Version')
+   if ($dotNet3p5version -eq "3.5.30729.01")
+      {
+      write-host -foregroundcolor green "PASS: Microsoft.NET Framework 3.5sp1 is installed"
+      $pass += 1
+      }
+   else
+      {
+      write-host -foregroundcolor red "FAIL: Microsoft.NET Framework 3.5sp1 is NOT installed"
+      $fail += 1
+      $failList += "dotNet3p5sp1 "
+      }
+   }
+else
+   {
+   write-host -foregroundcolor red "FAIL: Microsoft.NET Framework 3.5sp1 is NOT installed"
+   $fail += 1
+   $failList += "dotNet3p5sp1 "
+   }
+  
+# ------------------
+# Check CrashHandler
+# ------------------
+$regKey = $reg.OpenSubKey("SOFTWARE\\Microsoft\\PmeDump" )
+if ($regKey -ne $Null)
+   {
+   $crashHandlerDC = $regkey.GetValue('DataCenter')
+   if ($crashHandlerDC -ne "")
+      {
+      write-host -foregroundcolor green "PASS: CrashHandler is installed (DataCenter = $crashHandlerDC)"
+      $pass += 1
+      }
+   else
+      {
+      write-host -foregroundcolor red "FAIL: CrashHandler is NOT correctly installed"
+      $fail += 1
+      $failList += "crashhandler "
+      }
+   }
+else
+   {
+   write-host -foregroundcolor red "FAIL: CrashHandler is NOT installed"
+   $fail += 1
+   $failList += "crashhandler "
+   }
+ 
+# ------------
+# Check telnet
+# ------------
+  
+if ((test-path "\\$server\c$\Windows\System32\telnet.exe"))
+   {
+   write-host -foregroundcolor green "PASS: telnet is installed"
+   $pass += 1
+   }
+else
+   {
+   write-host -foregroundcolor yellow "WARN: telnet is NOT installed"
+   $warn += 1
+   $warnList += "telnet "
+   }
+  
+# ------------
+# Check Timezone
+# ------------
+  
+$expectedTZ = "(GMT-08:00) Pacific Time (US & Canada)"
+$serverTZ = get-wmiobject -Class "win32_TimeZone" -namespace "root\CIMV2" -computername $server
+if ($serverTZ.caption -eq $expectedTZ)
+   {
+   write-host -foregroundcolor green "PASS: timezone is $expectedTZ"
+   $pass += 1
+   }
+else
+   {
+   write-host -foregroundcolor yellow "WARN: timezone is NOT $expectedTZ"
+   $warn += 1
+   $warnList += "timezone "
+   }
+ 
+write-output "$server Pass: $pass   Fail: $fail ($($failList.trim()))   Warn: $warn ($($warnList.trim()))"
+write-host " "  
+ 
+=============================================================================================
+foreach ($server in get-content "db3servers-v4.txt") {.\test-remoteServerConfiguration.ps1 "$server" >> db3serversaudit-v4.txt}
+=============================================================================================
